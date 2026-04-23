@@ -188,5 +188,3 @@ MIT License – free to use, modify, and distribute with attribution.
 
 Developed by [izanlou](https://github.com/izanlou) for **Asr-e No Company** (عصری نو).  
 2024–2025
-```
- 
