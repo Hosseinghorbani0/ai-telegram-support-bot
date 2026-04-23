@@ -186,5 +186,5 @@ MIT License – free to use, modify, and distribute with attribution.
 
 ## Author
 
-Developed by [hosseinghorbani0](https://github.com/hosseinghorbani0) for **[asreno] (https://asrino24.com/) Company** (عصری نو).  
+Developed by [hosseinghorbani0](https://github.com/hosseinghorbani0) for **[asrino] (https://asrino24.com/) Company** (عصری نو).  
 2024–2025
