@@ -1,10 +1,4 @@
-چشم. برای اینکه راحت کپی کنی و ذخیره کنی، من محتوای فایل انگلیسی (`README.md`) رو توی یک کادر کد جداگانه میذارم. می‌تونی کل محتوای کادر رو کپی کنی، توی ادیتور مثل Notepad بچسبونی و با اسم `README.md` ذخیره کنی. فایل فارسی هم اگر خواستی در ادامه میدم.
 
----
-
-## فایل `README.md` (انگلیسی) – کل محتوا برای کپی کردن
-
-```markdown
 # AI Telegram Support Bot
 
 An advanced Telegram bot for customer support management powered by OpenAI GPT-4o-mini.  
