@@ -4,7 +4,7 @@
 An advanced Telegram bot for customer support management powered by OpenAI GPT-4o-mini.  
 This bot enables **VIP agents** to manage **client chats** with features like persona customization, flag-based reporting, file processing, and chat import/export.
 
-> Developed for **Asr-e No Company** (عصری نو).
+> Developed for **asrino24.com Company** (عصری نو).
 
 ---
 
