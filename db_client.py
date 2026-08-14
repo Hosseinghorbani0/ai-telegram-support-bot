@@ -6,108 +6,138 @@ VIP_FOLDER = os.path.join(DB_FOLDER, 'vip')
 CLI_FOLDER = os.path.join(DB_FOLDER, 'cli')
 DYN_FILE = os.path.join(DB_FOLDER, 'dyn_config.json')
 
+# Helper function to ensure folders exist
+def _ensure_dir(path):
+    os.makedirs(os.path.dirname(path) if '.' in os.path.basename(path) else path, exist_ok=True)
+
 def get_path(type: bool, object):
     object = str(object)
-    if type:
-        for filename in os.listdir(CLI_FOLDER):
-            if object in filename:
-                return os.path.join(CLI_FOLDER, filename)
-    else:
-        for filename in os.listdir(VIP_FOLDER):
-            if object in filename:
-                return os.path.join(VIP_FOLDER, filename)
+    folder = CLI_FOLDER if type else VIP_FOLDER
+    try:
+        for filename in os.listdir(folder):
+            if object in filename and filename.endswith('.json'):
+                return os.path.join(folder, filename)
+    except FileNotFoundError:
+        pass
     return False
+
 def get_chat_ids(type: bool):
-    if type:
-        return [filename.split('.json')[0] for filename in os.listdir(CLI_FOLDER)]
-    else:
-        return [filename.split('.json')[0] for filename in os.listdir(VIP_FOLDER)]
+    folder = CLI_FOLDER if type else VIP_FOLDER
+    try:
+        return [filename.replace('.json', '') for filename in os.listdir(folder) if filename.endswith('.json')]
+    except FileNotFoundError:
+        return []
+
 def get_chat_names(type: bool):
+    folder = CLI_FOLDER if type else VIP_FOLDER
     chat_names = []
-    if type:
-        for filename in os.listdir(CLI_FOLDER):
-            path = os.path.join(CLI_FOLDER, filename)
-            chat_names.append(get_db(True, path, 0, None))
-    else:
-        for filename in os.listdir(VIP_FOLDER):
-            path = os.path.join(VIP_FOLDER, filename)
-            chat_names.append(get_db(True, path, 0, None))
+    try:
+        for filename in os.listdir(folder):
+            if filename.endswith('.json'):
+                path = os.path.join(folder, filename)
+                name = get_db(True, path, 0, None)
+                if name:  # فقط اگر اسم معتبر بود اضافه کنه
+                    chat_names.append(name)
+    except FileNotFoundError:
+        pass
     return chat_names
 
 def mk_db(type: bool, object: str, object_2):
-    object = str(object)
-    object_2 = str(object_2)
-    if type:
-        path = os.path.join(CLI_FOLDER, f'{object}.json')
-    else:
-        path = os.path.join(VIP_FOLDER, f'{object}.json')
-    with open(path, 'w') as file:
-        json.dump([{"role":"data", "content": object_2}], file, indent=4)
+    folder = CLI_FOLDER if type else VIP_FOLDER
+    path = os.path.join(folder, f'{str(object)}.json')
+    
+    try:
+        _ensure_dir(path)
+        with open(path, 'w', encoding='utf-8') as file:
+            json.dump([{"role": "data", "content": str(object_2)}], file, indent=4)
         return True
-    return False
+    except Exception:
+        return False
+
 def rm_db(path):
-    if os.path.exists(path):
+    try:
         os.remove(path)
         return True
-    return False
+    except FileNotFoundError:
+        return False
 
 def edit_db(type: bool, path, target, value):
-    value = str(value)
-    target = str(target)
-    with open(path, 'r') as file:
-        data = json.load(file)
-    if type:
-        for i, item in enumerate(data):
-            if item["content"] == target:
-                data[i]['content'] = value
-    else:
-        new_item = {
-            "role": target,
-            "content": value
-        }
-        data.append(new_item)
-    with open(path, 'w') as file:
-        json.dump(data, file, indent=4)
-        return True
-    return False
-def dump_db(type: bool, path, target, value):
-    value = str(value)
-    target = str(target)
-    with open(path, 'r') as file:
-        data = json.load(file)
-    if type:
-        data = [item for item in data if item["content"] != value]
-    else:
-        data = [item for item in data if item["role"] != target]
-    with open(path, 'w') as file:
-        json.dump(data, file, indent=4)
-        return True
-    return False
-def get_db(type: bool, path, index, target):
-    with open(path, 'r') as file:
-        data = json.load(file)
-    if type:
-        return data[index]['content']
-    else:
-        return [item['content'] for item in data if item['role'] == target]
-def exp_db(path):
-    if os.path.exists(path):
-        with open(path, 'r') as file:
+    try:
+        with open(path, 'r', encoding='utf-8') as file:
             data = json.load(file)
-        return data
-    return False
+            
+        if type:
+            for item in data:
+                if item.get("content") == str(target):
+                    item['content'] = str(value)
+        else:
+            data.append({
+                "role": str(target),
+                "content": str(value)
+            })
+            
+        with open(path, 'w', encoding='utf-8') as file:
+            json.dump(data, file, indent=4)
+        return True
+    except (FileNotFoundError, json.JSONDecodeError):
+        return False
+
+def dump_db(type: bool, path, target, value):
+    try:
+        with open(path, 'r', encoding='utf-8') as file:
+            data = json.load(file)
+            
+        if type:
+            data = [item for item in data if item.get("content") != str(value)]
+        else:
+            data = [item for item in data if item.get("role") != str(target)]
+            
+        with open(path, 'w', encoding='utf-8') as file:
+            json.dump(data, file, indent=4)
+        return True
+    except (FileNotFoundError, json.JSONDecodeError):
+        return False
+
+def get_db(type: bool, path, index, target):
+    try:
+        with open(path, 'r', encoding='utf-8') as file:
+            data = json.load(file)
+            
+        if type:
+            return data[index].get('content')
+        else:
+            return [item.get('content') for item in data if item.get('role') == target]
+    except (FileNotFoundError, json.JSONDecodeError, IndexError):
+        return False
+
+def exp_db(path):
+    try:
+        with open(path, 'r', encoding='utf-8') as file:
+            return json.load(file)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return False
 
 def get_dyn(target):
-    with open(DYN_FILE, 'r') as file:
-        data = json.load(file)
-    return data[target]
+    try:
+        with open(DYN_FILE, 'r', encoding='utf-8') as file:
+            data = json.load(file)
+        return data.get(target)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return None
+
 def edit_dyn(target, value):
-    with open(DYN_FILE, 'r') as file:
-        data = json.load(file)
-    data[target] = value
-    with open(DYN_FILE, 'w') as file:
-        json.dump(data, file, indent=4)
+    try:
+        if os.path.exists(DYN_FILE):
+            with open(DYN_FILE, 'r', encoding='utf-8') as file:
+                data = json.load(file)
+        else:
+            data = {}
+            
+        data[target] = value
+        
+        _ensure_dir(DYN_FILE)
+        with open(DYN_FILE, 'w', encoding='utf-8') as file:
+            json.dump(data, file, indent=4)
         return True
-    return False
-
-
+    except Exception:
+        return False
