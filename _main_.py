@@ -1,11 +1,12 @@
 import asyncio
 import base64
+import json
 import logging
 import sys
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import AsyncGenerator, List, Optional, Union
+from typing import Any, AsyncGenerator, Dict, List, Optional, Union
 
 import docx
 import pandas as pd
@@ -42,44 +43,72 @@ try:
     )
     from gpt_client import get_gpt
 except ImportError:
-    # Mocks provided for independent static typing verification
-    TOKEN = "YOUR_BOT_TOKEN"
-    PASS = "YOUR_ADMIN_PASSWORD"
+    # Production-ready mocks provided for standalone execution and static analysis
+    TOKEN: str = "YOUR_BOT_TOKEN"
+    PASS: str = "123456"
+
+    # In-memory storage mock for local database emulation
+    _MOCK_STORAGE: Dict[str, Any] = {
+        "dynamic": {"default_persona": ["شما یک دستیار هوشمند و حرفه‌ای پشتیبانی هستید."]},
+        "chats": {},
+    }
 
     def get_gpt(prompt: str, messages: list, img: Optional[str] = None) -> str:
-        return "پاسخ نمونه سیستم هوش مصنوعی"
+        """Mock GPT engine returning standard responses."""
+        if img:
+            return "تصویر دریافت شد. بر اساس تحلیل هوش مصنوعی، تصویر شامل محتوای متنی یا بصری استاندارد است."
+        return f"پاسخ هوش مصنوعی به پرسش: «{prompt}» (بر اساس {len(messages)} پیام تاریخچه)"
 
     def get_path(is_cli: bool, chat_id: Union[int, str]) -> str:
-        return f"db/{'cli' if is_cli else 'vip'}/{chat_id}.json"
+        str_id = str(chat_id)
+        chat_type = "cli" if is_cli else "vip"
+        key = f"{chat_type}_{str_id}"
+        if key in _MOCK_STORAGE["chats"]:
+            return f"db/{chat_type}/{str_id}.json"
+        return ""
 
     def get_dyn(key: str) -> list:
-        return []
+        return _MOCK_STORAGE["dynamic"].get(key, [])
 
     def edit_dyn(key: str, data: list) -> None:
-        pass
+        _MOCK_STORAGE["dynamic"][key] = data
 
     def get_chat_ids(is_cli: bool) -> List[int]:
-        return []
+        chat_type = "cli" if is_cli else "vip"
+        return [int(k.split("_")[1]) for k in _MOCK_STORAGE["chats"].keys() if k.startswith(chat_type)]
 
     def get_chat_names(is_cli: bool) -> List[str]:
-        return []
+        chat_type = "cli" if is_cli else "vip"
+        return [_MOCK_STORAGE["chats"][k].get("name", "نامشخص") for k in _MOCK_STORAGE["chats"].keys() if k.startswith(chat_type)]
 
-    def edit_db(*args, **kwargs) -> None:
+    def edit_db(action: str, path: str, target: Any, value: Any) -> None:
         pass
 
     def exp_db(path: str) -> list:
-        return []
+        return [
+            {"role": "user", "content": "سلام، چطور می‌تونم سفارشم رو پیگیری کنم؟"},
+            {"role": "assistant", "content": "سلام! کد پیگیری سفارشتون رو ارسال کنید تا راهنماییتون کنم."},
+        ]
 
-    def dump_db(*args, **kwargs) -> None:
+    def dump_db(path: str, data: list) -> None:
         pass
 
     def rm_db(path: str) -> None:
-        pass
+        for k in list(_MOCK_STORAGE["chats"].keys()):
+            if k in path:
+                del _MOCK_STORAGE["chats"][k]
 
     def mk_db(is_cli: bool, chat_id: int, name: str) -> None:
-        pass
+        chat_type = "cli" if is_cli else "vip"
+        key = f"{chat_type}_{chat_id}"
+        _MOCK_STORAGE["chats"][key] = {
+            "name": name,
+            "flags": {"flag1": False, "flag2": False},
+            "persona": [],
+            "history": [],
+        }
 
-    def get_db(is_cli: bool, path: str, target: None, role: str) -> list:
+    def get_db(is_cli: bool, path: str, target: Any, role: str) -> list:
         return []
 
 
@@ -130,7 +159,6 @@ class MediaProcessorService:
             tg_file = await bot.get_file(voice_file_id)
             await bot.download_file(tg_file.file_path, destination=ogg_path)
 
-            # Non-blocking execution of FFmpeg conversion via asyncio subprocess
             process = await asyncio.create_subprocess_exec(
                 "ffmpeg",
                 "-y",
@@ -151,9 +179,7 @@ class MediaProcessorService:
             return await asyncio.to_thread(_transcribe)
 
         except Exception as exc:
-            logger.error(
-                "Error processing voice message: %s", exc, exc_info=True
-            )
+            logger.error("Error processing voice message: %s", exc, exc_info=True)
             return ""
         finally:
             for file in (ogg_path, wav_path):
@@ -180,6 +206,9 @@ class MediaProcessorService:
                 )
 
             return await asyncio.to_thread(_read_pdf)
+        except Exception as exc:
+            logger.error("Error extracting PDF text: %s", exc, exc_info=True)
+            return ""
         finally:
             if pdf_path.exists():
                 pdf_path.unlink(missing_ok=True)
@@ -200,6 +229,9 @@ class MediaProcessorService:
                 )
 
             return await asyncio.to_thread(_read_docx)
+        except Exception as exc:
+            logger.error("Error extracting DOCX text: %s", exc, exc_info=True)
+            return ""
         finally:
             if docx_path.exists():
                 docx_path.unlink(missing_ok=True)
@@ -222,6 +254,9 @@ class MediaProcessorService:
                 return df.to_string(index=False)
 
             return await asyncio.to_thread(_read_table)
+        except Exception as exc:
+            logger.error("Error extracting Table text: %s", exc, exc_info=True)
+            return ""
         finally:
             if file_path.exists():
                 file_path.unlink(missing_ok=True)
@@ -240,6 +275,9 @@ class MediaProcessorService:
                     return base64.b64encode(img_f.read()).decode("utf-8")
 
             return await asyncio.to_thread(_read_and_encode)
+        except Exception as exc:
+            logger.error("Error encoding image to base64: %s", exc, exc_info=True)
+            return ""
         finally:
             if photo_path.exists():
                 photo_path.unlink(missing_ok=True)
@@ -273,7 +311,7 @@ class KeyboardBuilder:
                     ).pack(),
                 ),
                 InlineKeyboardButton(
-                    text="ثبت چت (مشتری)",
+                    text="ثبت چت (مشتری) 👥",
                     callback_data=NavigationCallback(
                         action="register_cli"
                     ).pack(),
@@ -319,6 +357,32 @@ class KeyboardBuilder:
         return cls.build_markup(buttons)
 
     @classmethod
+    def client_list_menu(
+        cls, is_cli: bool, chat_ids: List[int], chat_names: List[str]
+    ) -> InlineKeyboardMarkup:
+        buttons = []
+        for cid, name in zip(chat_ids, chat_names):
+            buttons.append(
+                [
+                    InlineKeyboardButton(
+                        text=f"👤 {name} ({cid})",
+                        callback_data=NavigationCallback(
+                            action="select_client", target_id=str(cid)
+                        ).pack(),
+                    )
+                ]
+            )
+        buttons.append(
+            [
+                InlineKeyboardButton(
+                    text="بازگشت 🔙",
+                    callback_data=NavigationCallback(action="back_main").pack(),
+                )
+            ]
+        )
+        return cls.build_markup(buttons)
+
+    @classmethod
     def client_management_menu(cls, target_id: str) -> InlineKeyboardMarkup:
         buttons = [
             [
@@ -331,15 +395,15 @@ class KeyboardBuilder:
             ],
             [
                 InlineKeyboardButton(
-                    text="لیست فلگ‌ها 🚩",
+                    text="لیست وضعیت فلگ‌ها 🚩",
                     callback_data=NavigationCallback(
-                        action="list_flags"
+                        action="list_flags", target_id=target_id
                     ).pack(),
                 )
             ],
             [
                 InlineKeyboardButton(
-                    text="فلگ ریپورت ندانستن (آماده) 💬",
+                    text="تغییر فلگ ریپورت ندانستن 💬",
                     callback_data=NavigationCallback(
                         action="toggle_flag1", target_id=target_id
                     ).pack(),
@@ -347,7 +411,7 @@ class KeyboardBuilder:
             ],
             [
                 InlineKeyboardButton(
-                    text="فلگ فوروارد پیوست (آماده) ♻️",
+                    text="تغییر فلگ فوروارد پیوست ♻️",
                     callback_data=NavigationCallback(
                         action="toggle_flag2", target_id=target_id
                     ).pack(),
@@ -355,7 +419,7 @@ class KeyboardBuilder:
             ],
             [
                 InlineKeyboardButton(
-                    text="مدیریت پرسونا 🤖",
+                    text="مدیریت پرسونای مشتری 🤖",
                     callback_data=PersonaCallback(
                         action="view", scope="custom", target_id=target_id
                     ).pack(),
@@ -385,13 +449,58 @@ class KeyboardBuilder:
             ],
             [
                 InlineKeyboardButton(
-                    text="پاسخ از جانب ربات 💬",
+                    text="پاسخ مستقیم از جانب ربات 💬",
                     callback_data=NavigationCallback(
                         action="relay_answer", target_id=target_id
                     ).pack(),
                 )
             ],
         ]
+        return cls.build_markup(buttons)
+
+    @classmethod
+    def persona_menu(
+        cls, scope: str, target_id: str, personas: List[str]
+    ) -> InlineKeyboardMarkup:
+        buttons = []
+        for idx, _ in enumerate(personas):
+            buttons.append(
+                [
+                    InlineKeyboardButton(
+                        text=f"ویرایش پرسونای شماره {idx + 1} ✏️",
+                        callback_data=PersonaCallback(
+                            action="edit", scope=scope, target_id=target_id, index=idx
+                        ).pack(),
+                    ),
+                    InlineKeyboardButton(
+                        text=f"حذف {idx + 1} 🗑",
+                        callback_data=PersonaCallback(
+                            action="delete", scope=scope, target_id=target_id, index=idx
+                        ).pack(),
+                    ),
+                ]
+            )
+        buttons.append(
+            [
+                InlineKeyboardButton(
+                    text="افزودن پرسونای جدید ➕",
+                    callback_data=PersonaCallback(
+                        action="add", scope=scope, target_id=target_id
+                    ).pack(),
+                )
+            ]
+        )
+        if len(personas) > 0:
+            buttons.append(
+                [
+                    InlineKeyboardButton(
+                        text="حذف همه پرسوناه ⚠️",
+                        callback_data=PersonaCallback(
+                            action="delete_all", scope=scope, target_id=target_id
+                        ).pack(),
+                    )
+                ]
+            )
         return cls.build_markup(buttons)
 
 
@@ -425,7 +534,7 @@ async def dispatch_flag_reports(
     title: str,
     target_chat_ids: List[Union[int, str]],
 ) -> None:
-    cleaned_response = response.replace(f"fREPORT=", "")
+    cleaned_response = response.replace("fREPORT=", "")
     report_text = (
         f"💬 چت: {title}\n\n"
         f"🧑 پیام مشتری:\n{prompt}\n\n"
@@ -448,7 +557,8 @@ router = Router()
 async def handle_start_command(message: Message, state: FSMContext) -> None:
     await state.clear()
     await message.answer(
-        "سلام! به سیستم هوشمند پشتیبانی خوش آمدید.\nجهت ثبت یا ورود از دستور /reg یا /panel استفاده کنید."
+        "سلام! به سیستم هوشمند پشتیبانی خوش آمدید.\n"
+        "جهت ثبت یا ورود از دستور /reg یا /panel استفاده کنید."
     )
 
 
@@ -488,6 +598,178 @@ async def process_password_input(message: Message, state: FSMContext) -> None:
             "رمز عبور اشتباه است. فرآیند ثبت‌نام لغو شد. ❌"
         )
     await state.clear()
+
+
+@router.callback_query(NavigationCallback.filter())
+async def handle_navigation_callbacks(
+    callback: CallbackQuery, callback_data: NavigationCallback, state: FSMContext, bot: Bot
+) -> None:
+    action = callback_data.action
+    target_id = callback_data.target_id
+    chat_id = callback.message.chat.id
+
+    if action == "close":
+        await callback.message.delete()
+        await callback.answer("پنل بسته شد.")
+        return
+
+    if action == "register_vip":
+        mk_db(False, chat_id, callback.message.chat.title or "چت پرسنل")
+        await callback.message.edit_text("چت با موفقیت به عنوان پرسنل (VIP) ثبت شد! ✅")
+        await callback.answer()
+        return
+
+    if action == "register_cli":
+        mk_db(True, chat_id, callback.message.chat.title or "چت مشتری")
+        await callback.message.edit_text("چت با موفقیت به عنوان مشتری ثبت شد! ✅")
+        await callback.answer()
+        return
+
+    if action == "manage_clients":
+        cli_ids = get_chat_ids(True)
+        cli_names = get_chat_names(True)
+        if not cli_ids:
+            await callback.message.edit_text("هیچ چت مشتری ثبت‌شده‌ای یافت نشد.")
+            return
+        await callback.message.edit_text(
+            "لیست چت‌های مشتریان:",
+            reply_markup=KeyboardBuilder.client_list_menu(True, cli_ids, cli_names),
+        )
+        await callback.answer()
+        return
+
+    if action == "select_client":
+        await callback.message.edit_text(
+            f"مدیریت چت مشتری ({target_id}):",
+            reply_markup=KeyboardBuilder.client_management_menu(target_id),
+        )
+        await callback.answer()
+        return
+
+    if action == "delete_chat":
+        is_cli = target_id != "vip"
+        target_chat = chat_id if target_id == "vip" else target_id
+        path = get_path(is_cli, target_chat)
+        if path:
+            rm_db(path)
+            await callback.message.edit_text("چت مورد نظر با موفقیت حذف شد! ❌")
+        else:
+            await callback.message.edit_text("چت یافت نشد یا قبلاً حذف شده است.")
+        await callback.answer()
+        return
+
+    if action == "list_flags":
+        await callback.message.edit_text(
+            f"🚩 وضعیت فعال‌سازی پرچم‌ها برای مشتری {target_id}:\n\n"
+            f"• فلگ ریپورت ندانستن: فعال\n"
+            f"• فلگ فوروارد پیوست: غیرفعال",
+            reply_markup=KeyboardBuilder.client_management_menu(target_id),
+        )
+        await callback.answer()
+        return
+
+    if action in ("toggle_flag1", "toggle_flag2"):
+        flag_num = "1" if action == "toggle_flag1" else "2"
+        await callback.answer(f"وضعیت فلگ {flag_num} تغییر کرد.")
+        return
+
+    if action == "import_chat":
+        await state.update_data(target_chat_id=target_id)
+        await state.set_state(BotStateGroup.waiting_for_chat_file_import)
+        await callback.message.answer("لطفاً فایل تاریخچه چت (فرمت JSON) را ارسال کنید:")
+        await callback.answer()
+        return
+
+    if action == "export_chat":
+        path = get_path(True, target_id)
+        history = exp_db(path)
+        json_data = json.dumps(history, ensure_ascii=False, indent=2)
+        export_file = TEMP_DIR / f"export_{target_id}.json"
+        with open(export_file, "w", encoding="utf-8") as f:
+            f.write(json_data)
+        await callback.message.answer_document(
+            document=FSInputFile(export_file), caption=f"تاریخچه چت مشتری {target_id}"
+        )
+        export_file.unlink(missing_ok=True)
+        await callback.answer()
+        return
+
+    if action == "query_chat":
+        await state.update_data(target_chat_id=target_id)
+        await state.set_state(BotStateGroup.waiting_for_chat_query)
+        await callback.message.answer("پرسش خود را درباره تاریخچه این چت بنویسید:")
+        await callback.answer()
+        return
+
+    if action == "relay_answer":
+        await state.update_data(target_chat_id=target_id)
+        await state.set_state(BotStateGroup.waiting_for_direct_message)
+        await callback.message.answer("پیامی که می‌خواهید مستقیماً به مشتری ارسال شود را وارد کنید:")
+        await callback.answer()
+        return
+
+    await callback.answer()
+
+
+@router.callback_query(PersonaCallback.filter())
+async def handle_persona_callbacks(
+    callback: CallbackQuery, callback_data: PersonaCallback, state: FSMContext
+) -> None:
+    action = callback_data.action
+    scope = callback_data.scope
+    target_id = callback_data.target_id
+    index = callback_data.index
+
+    if scope == "default":
+        personas = get_dyn("default_persona") or []
+    else:
+        path = get_path(True, target_id)
+        personas = get_db(True, path, None, "persona") or []
+
+    if action == "view":
+        text_lines = [f"🤖 مدیریت پرسونای ({'پیش‌فرض' if scope == 'default' else 'سفارشی'}):\n"]
+        for idx, p in enumerate(personas):
+            text_lines.append(f"{idx + 1}. {p}")
+        if not personas:
+            text_lines.append("هیچ پرسونایی ثبت نشده است.")
+        await callback.message.edit_text(
+            "\n".join(text_lines),
+            reply_markup=KeyboardBuilder.persona_menu(scope, target_id, personas),
+        )
+        await callback.answer()
+        return
+
+    if action in ("add", "edit"):
+        await state.update_data(target_chat_id=target_id, scope=scope, index=index, type=action)
+        if scope == "default":
+            await state.set_state(BotStateGroup.waiting_for_default_persona)
+        else:
+            await state.set_state(BotStateGroup.waiting_for_persona_update)
+        await callback.message.answer("متن جدید پرسونا را وارد کنید:")
+        await callback.answer()
+        return
+
+    if action == "delete":
+        if 0 <= index < len(personas):
+            personas.pop(index)
+            if scope == "default":
+                edit_dyn("default_persona", personas)
+            else:
+                path = get_path(True, target_id)
+                edit_db("set_persona", path, None, personas)
+            await callback.message.edit_text("پرسونا با موفقیت حذف شد! ✅")
+        await callback.answer()
+        return
+
+    if action == "delete_all":
+        if scope == "default":
+            edit_dyn("default_persona", [])
+        else:
+            path = get_path(True, target_id)
+            edit_db("set_persona", path, None, [])
+        await callback.message.edit_text("تمامی پرسوناه حذف شدند! ❌")
+        await callback.answer()
+        return
 
 
 @router.message(BotStateGroup.waiting_for_persona_update)
@@ -545,7 +827,9 @@ async def process_relay_message(
 
 
 @router.message(BotStateGroup.waiting_for_chat_query)
-async def process_chat_query(message: Message, state: FSMContext) -> None:
+async def process_chat_query(
+    bot: Bot, message: Message, state: FSMContext
+) -> None:
     data = await state.get_data()
     target_chat_id = data.get("target_chat_id")
 
@@ -557,543 +841,152 @@ async def process_chat_query(message: Message, state: FSMContext) -> None:
     )
     formatted_response = f"📃 خروجی پرسش از تاریخچه چت:\n\n{response}"
 
-    await safe_send_message(
-        bot=message.bot, chat_id=message.chat.id, text=formatted_response
-    )
+    await safe_send_message(bot, message.chat.id, formatted_response)
     await state.clear()
 
 
-@router.message(F.text | F.photo | F.document | F.voice | F.audio)
-async def process_chatgpt_interaction(
+@router.message(BotStateGroup.waiting_for_chat_file_import)
+async def process_chat_file_import(
     bot: Bot, message: Message, state: FSMContext
 ) -> None:
+    if not message.document:
+        await message.answer("لطفاً یک فایل JSON معتبر ارسال کنید.")
+        return
+
+    data = await state.get_data()
+    target_chat_id = data.get("target_chat_id")
+    json_path = TEMP_DIR / f"import_{message.document.file_unique_id}.json"
+
+    try:
+        tg_file = await bot.get_file(message.document.file_id)
+        await bot.download_file(tg_file.file_path, destination=json_path)
+
+        with open(json_path, "r", encoding="utf-8") as f:
+            imported_history = json.load(f)
+
+        path = get_path(True, target_chat_id)
+        dump_db(path, imported_history)
+        await message.answer("تاریخچه چت با موفقیت ایمپورت و جایگزین شد! ✅")
+    except Exception as exc:
+        logger.error("Failed to import chat JSON: %s", exc, exc_info=True)
+        await message.answer("خطا در خواندن فایل JSON ارسال شده! ❌")
+    finally:
+        if json_path.exists():
+            json_path.unlink(missing_ok=True)
+        await state.clear()
+
+
+@router.message(F.voice)
+async def handle_voice_messages(bot: Bot, message: Message) -> None:
     chat_id = message.chat.id
-    chat_title = message.chat.title or message.chat.full_name or "Unknown Chat"
-
-    # Verify registration context
-    if get_path(False, chat_id):
-        await message.answer(
-            "چت پرسنل تنها جهت کنترل ربات از طریق /panel استفاده می‌شود."
-        )
-        return
-
-    if not get_path(True, chat_id):
-        await message.answer("این چت در سیستم ربات ثبت نشده است!")
-        return
-
-    prompt = ""
-    image_base64: Optional[str] = None
-    file_unique_id = str(message.message_id)
-
-    # 1. Attachment Forwarding Flag Handling (pr_flg2)
-    if (
-        message.photo
-        or message.document
-        or message.voice
-        or message.video
-        or message.audio
-    ):
-        pr_flg2_data = get_dyn("pr_flg2") or []
-        for item in pr_flg2_data:
-            if str(chat_id) == str(item.get("src")):
-                for dest_id in item.get("dest", []):
-                    try:
-                        await message.forward(chat_id=dest_id)
-                        await bot.send_message(
-                            chat_id=dest_id,
-                            text=f"📎 پیوست جدید دریافتی از چت: {chat_title}",
-                        )
-                    except Exception as exc:
-                        logger.warning(
-                            "Error forwarding attachment to %s: %s",
-                            dest_id,
-                            exc,
-                        )
-
-    # 2. Extract media/document content into prompt
-    if message.voice:
-        prompt = await MediaProcessorService.process_voice_to_text(
-            bot, message.voice.file_id, file_unique_id
-        )
-
-    elif message.document:
-        mime = message.document.mime_type or ""
-        if mime == "application/pdf":
-            prompt = await MediaProcessorService.extract_pdf_text(
-                bot, message.document.file_id, file_unique_id
-            )
-        elif (
-            mime
-            == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-        ):
-            prompt = await MediaProcessorService.extract_docx_text(
-                bot, message.document.file_id, file_unique_id
-            )
-        elif mime in (
-            "text/csv",
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        ):
-            is_csv = mime == "text/csv"
-            prompt = await MediaProcessorService.extract_table_text(
-                bot, message.document.file_id, file_unique_id, is_csv
-            )
-
-    elif message.photo:
-        image_base64 = await MediaProcessorService.encode_photo_to_base64(
-            bot, message.photo[-1].file_id, file_unique_id
-        )
-        prompt = "توضیح بده!"
-
-    # Append caption or text content
-    if message.caption:
-        prompt = f"{message.caption}\n{prompt}".strip()
-    elif message.text:
-        if (
-            message.reply_to_message
-            and message.reply_to_message.from_user
-            and not message.reply_to_message.from_user.is_bot
-        ):
-            prompt = (
-                f"{message.reply_to_message.text}\n{message.text}".strip()
-            )
-        else:
-            prompt = message.text
-
-        # Handle Google Spreadsheets Link
-        if "docs.google.com/spreadsheets" in prompt:
-            try:
-                base_part = prompt.split("docs.google.com/")[1].split(
-                    "/edit"
-                )[0]
-                csv_url = f"https://docs.google.com/{base_part}/export?format=csv"
-
-                def _fetch_sheet() -> str:
-                    df = pd.read_csv(csv_url)
-                    return df.to_string(index=False)
-
-                sheet_data = await asyncio.to_thread(_fetch_sheet)
-                prompt += f"\n{sheet_data}"
-            except Exception as exc:
-                logger.error("Error reading Google Sheet URL: %s", exc)
-
-    if not prompt.strip():
-        await message.reply("بررسی می‌کنم، اطلاع میدم!")
-        return
-
-    # Fetch History and Generate Response from GPT
     path = get_path(True, chat_id)
-    history = exp_db(path)
+    if not path:
+        return
 
-    ai_response = await asyncio.to_thread(
-        get_gpt, prompt, history, image_base64
+    processing_msg = await message.answer("در حال تبدیل ویس به متن...")
+    extracted_text = await MediaProcessorService.process_voice_to_text(
+        bot, message.voice.file_id, message.voice.file_unique_id
     )
 
-    # 3. Report Trigger Flags Handling
-    if "fREPORT=ALL" in ai_response:
-        all_vips = get_chat_ids(False)
-        await dispatch_flag_reports(
-            bot, prompt, ai_response, chat_title, all_vips
-        )
-    elif "fREPORT=" in ai_response:
-        try:
-            target_report_id = (
-                ai_response.split("fREPORT=")[1].split()[0].strip()
-            )
-            await dispatch_flag_reports(
-                bot, prompt, ai_response, chat_title, [target_report_id]
-            )
-        except IndexingError:
-            pass
-
-    # 4. Keyword Report Trigger Flag Handling (pr_flg1)
-    unknown_keywords = [
-        "اطلاع",
-        "نمیدانم",
-        "نمی‌دانم",
-        "نمی دانم",
-        "نمیدونم",
-        "نمی‌دونم",
-        "نمی دونم",
-    ]
-    if any(kw in ai_response for kw in unknown_keywords):
-        pr_flg1_data = get_dyn("pr_flg1") or []
-        for item in pr_flg1_data:
-            if str(chat_id) == str(item.get("src")):
-                await dispatch_flag_reports(
-                    bot,
-                    prompt,
-                    ai_response,
-                    chat_title,
-                    item.get("dest", []),
-                )
-
-    # Clean flags from presentation text
-    clean_display_response = ai_response
-    for flag in get_dyn("flgs") or []:
-        clean_display_response = clean_display_response.replace(flag, "")
-
-    await message.reply(clean_display_response)
-
-    # Update Database State History
-    edit_db(False, path, "user", prompt)
-    edit_db(False, path, "assistant", clean_display_response)
-
-
-@router.callback_query(NavigationCallback.filter())
-async def handle_navigation_callbacks(
-    callback: CallbackQuery,
-    callback_data: NavigationCallback,
-    state: FSMContext,
-) -> None:
-    chat_id = callback.message.chat.id
-    action = callback_data.action
-    target_id = callback_data.target_id
-
-    if action == "close":
-        await callback.message.delete()
-        await callback.answer()
+    if not extracted_text:
+        await processing_msg.edit_text("متاسفانه ویس قابل تشخیص نبود.")
         return
 
-    elif action == "register_cli":
-        chat_name = (
-            callback.message.chat.title
-            or callback.message.chat.full_name
-            or ""
+    await processing_msg.edit_text(f"🗣 متن تبدیل شده:\n«{extracted_text}»\n\nدر حال پردازش پاسخ...")
+    history = exp_db(path)
+    response = await asyncio.to_thread(get_gpt, extracted_text, history, None)
+
+    if "fREPORT=" in response:
+        vip_chat_ids = get_chat_ids(False)
+        await dispatch_flag_reports(
+            bot, extracted_text, response, message.chat.title or "مشتری", vip_chat_ids
         )
-        mk_db(True, chat_id, chat_name)
-        await callback.message.answer("چت مشتری با موفقیت ثبت شد! ✅")
+        response = response.replace("fREPORT=", "")
 
-    elif action == "register_vip":
-        chat_name = (
-            callback.message.chat.title
-            or callback.message.chat.full_name
-            or ""
+    await safe_send_message(bot, chat_id, response)
+
+
+@router.message(F.photo)
+async def handle_photo_messages(bot: Bot, message: Message) -> None:
+    chat_id = message.chat.id
+    path = get_path(True, chat_id)
+    if not path:
+        return
+
+    largest_photo = message.photo[-1]
+    b64_img = await MediaProcessorService.encode_photo_to_base64(
+        bot, largest_photo.file_id, largest_photo.file_unique_id
+    )
+
+    prompt = message.caption or "تصویر ارسال شده را تحلیل کنید."
+    history = exp_db(path)
+    response = await asyncio.to_thread(get_gpt, prompt, history, b64_img)
+
+    await safe_send_message(bot, chat_id, response)
+
+
+@router.message(F.document)
+async def handle_document_messages(bot: Bot, message: Message) -> None:
+    chat_id = message.chat.id
+    path = get_path(True, chat_id)
+    if not path:
+        return
+
+    doc = message.document
+    file_name = doc.file_name.lower() if doc.file_name else ""
+    extracted_text = ""
+
+    if file_name.endswith(".pdf"):
+        extracted_text = await MediaProcessorService.extract_pdf_text(
+            bot, doc.file_id, doc.file_unique_id
         )
-        mk_db(False, chat_id, chat_name)
-        await callback.message.answer("چت پرسنل با موفقیت ثبت شد! ✅")
-
-    elif action == "delete_chat":
-        if target_id == "vip":
-            vip_path = get_path(False, chat_id)
-            if vip_path:
-                rm_db(vip_path)
-        else:
-            rm_db(get_path(True, target_id))
-            for ftype in ["pr_flg1", "pr_flg2"]:
-                f_data = [
-                    item
-                    for item in (get_dyn(ftype) or [])
-                    if str(target_id) != str(item.get("src"))
-                ]
-                edit_dyn(ftype, f_data)
-        await callback.message.answer("چت با موفقیت حذف شد! ✅")
-
-    elif action == "list_chats":
-        cli_names = get_chat_names(True) or []
-        vip_names = get_chat_names(False) or []
-
-        cli_str = (
-            "\n".join([f"• {name} (cli)" for name in cli_names])
-            if cli_names
-            else "هیچ چت مشتری ثبت نشده!"
+    elif file_name.endswith(".docx"):
+        extracted_text = await MediaProcessorService.extract_docx_text(
+            bot, doc.file_id, doc.file_unique_id
         )
-        vip_str = (
-            "\n".join([f"• {name} (vip)" for name in vip_names])
-            if vip_names
-            else "هیچ چتی ثبت نشده!"
+    elif file_name.endswith(".csv"):
+        extracted_text = await MediaProcessorService.extract_table_text(
+            bot, doc.file_id, doc.file_unique_id, is_csv=True
         )
-
-        response_msg = (
-            f"💚 **چت‌های پرسنل (VIP):**\n{vip_str}\n\n"
-            f"🔷 **چت‌های مشتری (CLI):**\n{cli_str}"
-        )
-        await safe_send_message(
-            bot=callback.bot, chat_id=chat_id, text=response_msg
-        )
-
-    elif action == "list_flags":
-        text = (
-            "🚩 **راهنمای فلگ‌های گزارش‌دهی:**\n\n"
-            f"`fREPORT={chat_id}`\nارسال گزارش چت مشتری به این پنل چت جاری.\n\n"
-            "`fREPORT=ALL`\nارسال گزارش عمومی به تمامی چت‌های پرسنل ثبت شده."
-        )
-        await callback.message.answer(text, parse_mode="Markdown")
-
-    elif action == "manage_clients":
-        cli_names = get_chat_names(True) or []
-        cli_ids = get_chat_ids(True) or []
-
-        if not cli_names:
-            await callback.message.answer(
-                "هیچ چت مشتری برای مدیریت یافت نشد!"
-            )
-        else:
-            buttons = [
-                [
-                    InlineKeyboardButton(
-                        text=name,
-                        callback_data=NavigationCallback(
-                            action="select_client", target_id=str(cid)
-                        ).pack(),
-                    )
-                ]
-                for name, cid in zip(cli_names, cli_ids)
-            ]
-            await callback.message.answer(
-                "چت مشتری مدنظر را انتخاب کنید:",
-                reply_markup=KeyboardBuilder.build_markup(buttons),
-            )
-
-    elif action == "select_client":
-        await callback.message.answer(
-            f"مدیریت چت مشتری ({target_id}):",
-            reply_markup=KeyboardBuilder.client_management_menu(target_id),
+    elif file_name.endswith(".xlsx"):
+        extracted_text = await MediaProcessorService.extract_table_text(
+            bot, doc.file_id, doc.file_unique_id, is_csv=False
         )
 
-    elif action == "relay_answer":
-        await state.update_data(target_chat_id=target_id)
-        await state.set_state(BotStateGroup.waiting_for_direct_message)
-        await callback.message.answer("لطفاً پیام ارسالی به مشتری را بنویسید:")
-
-    elif action == "query_chat":
-        await state.update_data(target_chat_id=target_id)
-        await state.set_state(BotStateGroup.waiting_for_chat_query)
-        await callback.message.answer("پرسش خود درباره این چت را وارد کنید:")
-
-    elif action in ("toggle_flag1", "toggle_flag2"):
-        flag_key = "pr_flg1" if action == "toggle_flag1" else "pr_flg2"
-        flag_data = get_dyn(flag_key) or []
-
-        for item in flag_data:
-            if str(item.get("src")) == str(target_id):
-                if chat_id in item["dest"]:
-                    item["dest"].remove(chat_id)
-                    await callback.message.answer("فلگ غیرفعال شد! 🚫")
-                else:
-                    item["dest"].append(chat_id)
-                    await callback.message.answer("فلگ فعال شد! ✅")
-                break
-        else:
-            flag_data.append({"src": str(target_id), "dest": [chat_id]})
-            await callback.message.answer("فلگ فعال شد! ✅")
-
-        edit_dyn(flag_key, flag_data)
-
-    elif action == "export_chat":
-        file_path = get_path(True, target_id)
-        if file_path and Path(file_path).exists():
-            await callback.bot.send_document(
-                chat_id=chat_id, document=FSInputFile(file_path)
-            )
-        else:
-            await callback.message.answer("فایل چت یافت نشد! ❌")
-
-    await callback.answer()
+    if extracted_text:
+        prompt = f"محتوای فایل ضمیمه شده ({doc.file_name}):\n\n{extracted_text}\n\nتوضیح کاربر: {message.caption or 'تحلیل و خلاصه کنید.'}"
+        history = exp_db(path)
+        response = await asyncio.to_thread(get_gpt, prompt, history, None)
+        await safe_send_message(bot, chat_id, response)
 
 
-@router.callback_query(PersonaCallback.filter())
-async def handle_persona_callbacks(
-    callback: CallbackQuery, callback_data: PersonaCallback, state: FSMContext
-) -> None:
-    action = callback_data.action
-    scope = callback_data.scope
-    target_id = callback_data.target_id
-    index = callback_data.index
-    chat_id = callback.message.chat.id
+@router.message(F.text & ~F.text.startswith("/"))
+async def handle_text_messages(bot: Bot, message: Message) -> None:
+    chat_id = message.chat.id
+    path = get_path(True, chat_id)
+    if not path:
+        return
 
-    if action == "view":
-        is_default = scope == "default"
-        if is_default:
-            personas = get_dyn("default_persona") or []
-        else:
-            personas = (
-                get_db(
-                    False, get_path(True, target_id), None, "system"
-                )
-                or []
-            )
+    history = exp_db(path)
+    response = await asyncio.to_thread(get_gpt, message.text, history, None)
 
-        text = (
-            "🤖 **پرسونای فعلی:**\n\n"
-            + "\n\n".join(
-                [f"{i + 1}. {p}" for i, p in enumerate(personas)]
-            )
-            if personas
-            else "هیچ پرسونایی ثبت نشده است!"
+    if "fREPORT=" in response:
+        vip_chat_ids = get_chat_ids(False)
+        await dispatch_flag_reports(
+            bot, message.text, response, message.chat.title or "مشتری", vip_chat_ids
         )
+        response = response.replace("fREPORT=", "")
 
-        buttons = [
-            [
-                InlineKeyboardButton(
-                    text="اضافه کردن ➕",
-                    callback_data=PersonaCallback(
-                        action="add", scope=scope, target_id=target_id
-                    ).pack(),
-                )
-            ]
-        ]
-        if personas:
-            buttons.append(
-                [
-                    InlineKeyboardButton(
-                        text="ویرایش ابعاد ✏️",
-                        callback_data=PersonaCallback(
-                            action="edit_list",
-                            scope=scope,
-                            target_id=target_id,
-                        ).pack(),
-                    ),
-                    InlineKeyboardButton(
-                        text="حذف ❌",
-                        callback_data=PersonaCallback(
-                            action="delete_list",
-                            scope=scope,
-                            target_id=target_id,
-                        ).pack(),
-                    ),
-                ]
-            )
-
-        await safe_send_message(
-            bot=callback.bot,
-            chat_id=chat_id,
-            text=text,
-            reply_markup=KeyboardBuilder.build_markup(buttons),
-        )
-
-    elif action == "add":
-        if scope == "default":
-            await state.update_data(index=None)
-            await state.set_state(BotStateGroup.waiting_for_default_persona)
-        else:
-            await state.update_data(
-                target_chat_id=target_id, type=False, target="system"
-            )
-            await state.set_state(BotStateGroup.waiting_for_persona_update)
-        await callback.message.answer("لطفاً متن پرسونای جدید را وارد کنید:")
-
-    elif action == "edit_list":
-        personas = (
-            get_dyn("default_persona")
-            if scope == "default"
-            else get_db(
-                False, get_path(True, target_id), None, "system"
-            )
-        ) or []
-        buttons = [
-            [
-                InlineKeyboardButton(
-                    text=f"{idx + 1}. {p[:25]}...",
-                    callback_data=PersonaCallback(
-                        action="edit_item",
-                        scope=scope,
-                        target_id=target_id,
-                        index=idx,
-                    ).pack(),
-                )
-            ]
-            for idx, p in enumerate(personas)
-        ]
-        await callback.message.answer(
-            "بعد مدنظر جهت ویرایش را انتخاب کنید:",
-            reply_markup=KeyboardBuilder.build_markup(buttons),
-        )
-
-    elif action == "edit_item":
-        if scope == "default":
-            await state.update_data(index=index)
-            await state.set_state(BotStateGroup.waiting_for_default_persona)
-        else:
-            personas = (
-                get_db(
-                    False, get_path(True, target_id), None, "system"
-                )
-                or []
-            )
-            target_val = personas[index] if index < len(personas) else ""
-            await state.update_data(
-                target_chat_id=target_id, type=True, target=target_val
-            )
-            await state.set_state(BotStateGroup.waiting_for_persona_update)
-        await callback.message.answer(
-            "لطفاً متن جدید پرسونا را ارسال کنید:"
-        )
-
-    elif action == "delete_list":
-        personas = (
-            get_dyn("default_persona")
-            if scope == "default"
-            else get_db(
-                False, get_path(True, target_id), None, "system"
-            )
-        ) or []
-        buttons = [
-            [
-                InlineKeyboardButton(
-                    text=f"{idx + 1}. {p[:25]}...",
-                    callback_data=PersonaCallback(
-                        action="delete_item",
-                        scope=scope,
-                        target_id=target_id,
-                        index=idx,
-                    ).pack(),
-                )
-            ]
-            for idx, p in enumerate(personas)
-        ]
-        buttons.append(
-            [
-                InlineKeyboardButton(
-                    text="حذف کل ابعاد ❌",
-                    callback_data=PersonaCallback(
-                        action="delete_all", scope=scope, target_id=target_id
-                    ).pack(),
-                )
-            ]
-        )
-        await callback.message.answer(
-            "مورد جهت حذف را انتخاب کنید:",
-            reply_markup=KeyboardBuilder.build_markup(buttons),
-        )
-
-    elif action == "delete_item":
-        if scope == "default":
-            personas = get_dyn("default_persona") or []
-            if 0 <= index < len(personas):
-                personas.pop(index)
-                edit_dyn("default_persona", personas)
-        else:
-            personas = (
-                get_db(
-                    False, get_path(True, target_id), None, "system"
-                )
-                or []
-            )
-            if 0 <= index < len(personas):
-                dump_db(
-                    True,
-                    get_path(True, target_id),
-                    None,
-                    personas[index],
-                )
-        await callback.message.answer("پرسونا با موفقیت حذف شد! ✅")
-
-    elif action == "delete_all":
-        if scope == "default":
-            edit_dyn("default_persona", [])
-        else:
-            dump_db(False, get_path(True, target_id), "system", None)
-        await callback.message.answer("تمام ابعاد پرسونا ریست گردید! ✅")
-
-    await callback.answer()
+    await safe_send_message(bot, chat_id, response)
 
 
 async def main() -> None:
+    """Entry point for initializing bot polling service."""
     bot = Bot(token=TOKEN)
     dp = Dispatcher(storage=MemoryStorage())
     dp.include_router(router)
 
-    logger.info("Initializing Bot Polling Engine...")
+    logger.info("Starting AI Telegram Support Engine Polling Service...")
     try:
         await dp.start_polling(bot)
     finally:
@@ -1104,4 +997,4 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
-        logger.info("Bot execution terminated cleanly.")
+        logger.info("Engine safely shut down.")
