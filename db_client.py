@@ -1,143 +1,270 @@
+
 import json
 import os
+import tempfile
 
-DB_FOLDER = 'db'
-VIP_FOLDER = os.path.join(DB_FOLDER, 'vip')
-CLI_FOLDER = os.path.join(DB_FOLDER, 'cli')
-DYN_FILE = os.path.join(DB_FOLDER, 'dyn_config.json')
+DB_FOLDER = "db"
+VIP_FOLDER = os.path.join(DB_FOLDER, "vip")
+CLI_FOLDER = os.path.join(DB_FOLDER, "cli")
+DYN_FILE = os.path.join(DB_FOLDER, "dyn_config.json")
 
-# Helper function to ensure folders exist
+
+# -------------------------
+# Internal helpers
+# -------------------------
+
 def _ensure_dir(path):
-    os.makedirs(os.path.dirname(path) if '.' in os.path.basename(path) else path, exist_ok=True)
+    """Ensure the parent directory of a file, or the directory itself, exists."""
+    if not path:
+        return False
+
+    path = os.fspath(path)
+    extension = os.path.splitext(os.path.basename(path))[1]
+
+    folder = os.path.dirname(path) if extension else path
+
+    if folder:
+        os.makedirs(folder, exist_ok=True)
+
+    return True
+
+
+def _read_json(path):
+    """Read JSON safely. Return False on invalid/unreadable files."""
+    try:
+        with open(path, "r", encoding="utf-8") as file:
+            return json.load(file)
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        return False
+
+
+def _write_json(path, data):
+    """
+    Write JSON atomically to prevent partial/corrupted files
+    if the process stops during writing.
+    """
+    temp_path = None
+
+    try:
+        _ensure_dir(path)
+
+        folder = os.path.dirname(path) or "."
+
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=folder,
+            delete=False,
+            suffix=".tmp"
+        ) as file:
+            temp_path = file.name
+
+            json.dump(
+                data,
+                file,
+                indent=4,
+                ensure_ascii=True
+            )
+
+            file.flush()
+            os.fsync(file.fileno())
+
+        os.replace(temp_path, path)
+        return True
+
+    except (OSError, TypeError, ValueError):
+        return False
+
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
+
+
+def _get_folder(type):
+    """Return the appropriate database folder."""
+    return CLI_FOLDER if type else VIP_FOLDER
+
+
+def _is_valid_db(data):
+    """Validate the basic database structure."""
+    return isinstance(data, list) and all(
+        isinstance(item, dict) for item in data
+    )
+
+
+# -------------------------
+# Path / ID functions
+# -------------------------
 
 def get_path(type: bool, object):
     object = str(object)
-    folder = CLI_FOLDER if type else VIP_FOLDER
+    folder = _get_folder(type)
+
     try:
         for filename in os.listdir(folder):
-            if object in filename and filename.endswith('.json'):
+            if object in filename and filename.endswith(".json"):
                 return os.path.join(folder, filename)
-    except FileNotFoundError:
+
+    except OSError:
         pass
+
     return False
 
+
 def get_chat_ids(type: bool):
-    folder = CLI_FOLDER if type else VIP_FOLDER
+    folder = _get_folder(type)
+
     try:
-        return [filename.replace('.json', '') for filename in os.listdir(folder) if filename.endswith('.json')]
-    except FileNotFoundError:
+        return [
+            filename[:-5]
+            for filename in os.listdir(folder)
+            if filename.endswith(".json")
+        ]
+
+    except OSError:
         return []
 
+
 def get_chat_names(type: bool):
-    folder = CLI_FOLDER if type else VIP_FOLDER
+    folder = _get_folder(type)
     chat_names = []
+
     try:
         for filename in os.listdir(folder):
-            if filename.endswith('.json'):
-                path = os.path.join(folder, filename)
-                name = get_db(True, path, 0, None)
-                if name:  # فقط اگر اسم معتبر بود اضافه کنه
-                    chat_names.append(name)
-    except FileNotFoundError:
+            if not filename.endswith(".json"):
+                continue
+
+            path = os.path.join(folder, filename)
+            name = get_db(True, path, 0, None)
+
+            if name:
+                chat_names.append(name)
+
+    except OSError:
         pass
+
     return chat_names
 
+
+# -------------------------
+# Database management
+# -------------------------
+
 def mk_db(type: bool, object: str, object_2):
-    folder = CLI_FOLDER if type else VIP_FOLDER
-    path = os.path.join(folder, f'{str(object)}.json')
-    
-    try:
-        _ensure_dir(path)
-        with open(path, 'w', encoding='utf-8') as file:
-            json.dump([{"role": "data", "content": str(object_2)}], file, indent=4)
-        return True
-    except Exception:
-        return False
+    folder = _get_folder(type)
+    path = os.path.join(folder, f"{str(object)}.json")
+
+    data = [
+        {
+            "role": "data",
+            "content": str(object_2)
+        }
+    ]
+
+    return _write_json(path, data)
+
 
 def rm_db(path):
     try:
         os.remove(path)
         return True
-    except FileNotFoundError:
+
+    except OSError:
         return False
+
 
 def edit_db(type: bool, path, target, value):
-    try:
-        with open(path, 'r', encoding='utf-8') as file:
-            data = json.load(file)
-            
-        if type:
-            for item in data:
-                if item.get("content") == str(target):
-                    item['content'] = str(value)
-        else:
-            data.append({
-                "role": str(target),
-                "content": str(value)
-            })
-            
-        with open(path, 'w', encoding='utf-8') as file:
-            json.dump(data, file, indent=4)
-        return True
-    except (FileNotFoundError, json.JSONDecodeError):
+    data = _read_json(path)
+
+    if not _is_valid_db(data):
         return False
+
+    if type:
+        for item in data:
+            if item.get("content") == str(target):
+                item["content"] = str(value)
+
+    else:
+        data.append({
+            "role": str(target),
+            "content": str(value)
+        })
+
+    return _write_json(path, data)
+
 
 def dump_db(type: bool, path, target, value):
-    try:
-        with open(path, 'r', encoding='utf-8') as file:
-            data = json.load(file)
-            
-        if type:
-            data = [item for item in data if item.get("content") != str(value)]
-        else:
-            data = [item for item in data if item.get("role") != str(target)]
-            
-        with open(path, 'w', encoding='utf-8') as file:
-            json.dump(data, file, indent=4)
-        return True
-    except (FileNotFoundError, json.JSONDecodeError):
+    data = _read_json(path)
+
+    if not _is_valid_db(data):
         return False
+
+    if type:
+        data = [
+            item for item in data
+            if item.get("content") != str(value)
+        ]
+
+    else:
+        data = [
+            item for item in data
+            if item.get("role") != str(target)
+        ]
+
+    return _write_json(path, data)
+
 
 def get_db(type: bool, path, index, target):
-    try:
-        with open(path, 'r', encoding='utf-8') as file:
-            data = json.load(file)
-            
-        if type:
-            return data[index].get('content')
-        else:
-            return [item.get('content') for item in data if item.get('role') == target]
-    except (FileNotFoundError, json.JSONDecodeError, IndexError):
+    data = _read_json(path)
+
+    if not _is_valid_db(data):
         return False
+
+    try:
+        if type:
+            return data[index].get("content")
+
+        return [
+            item.get("content")
+            for item in data
+            if item.get("role") == target
+        ]
+
+    except (IndexError, TypeError):
+        return False
+
 
 def exp_db(path):
-    try:
-        with open(path, 'r', encoding='utf-8') as file:
-            return json.load(file)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return False
+    return _read_json(path)
+
+
+# -------------------------
+# Dynamic config
+# -------------------------
 
 def get_dyn(target):
-    try:
-        with open(DYN_FILE, 'r', encoding='utf-8') as file:
-            data = json.load(file)
-        return data.get(target)
-    except (FileNotFoundError, json.JSONDecodeError):
+    data = _read_json(DYN_FILE)
+
+    if not isinstance(data, dict):
         return None
 
+    return data.get(target)
+
+
 def edit_dyn(target, value):
-    try:
-        if os.path.exists(DYN_FILE):
-            with open(DYN_FILE, 'r', encoding='utf-8') as file:
-                data = json.load(file)
-        else:
-            data = {}
-            
-        data[target] = value
-        
-        _ensure_dir(DYN_FILE)
-        with open(DYN_FILE, 'w', encoding='utf-8') as file:
-            json.dump(data, file, indent=4)
-        return True
-    except Exception:
+    data = _read_json(DYN_FILE)
+
+    # Config file doesn't exist yet
+    if data is False:
+        data = {}
+
+    # Prevent writing into a corrupted/unexpected config structure
+    if not isinstance(data, dict):
         return False
+
+    data[target] = value
+
+    return _write_json(DYN_FILE, data)
